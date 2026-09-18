@@ -81,6 +81,24 @@ class TestCodeInterpreterTool:
         assert result.success is False
         assert "Blocked" in result.content
 
+    def test_reexported_process_module_blocked(self):
+        tool = CodeInterpreterTool()
+        result = tool.execute(code="import platform; platform.os.system('true')")
+        assert result.success is False
+        assert "Blocked" in result.content
+
+    def test_alternate_file_api_blocked(self, tmp_path):
+        marker = tmp_path / "marker.txt"
+        marker.write_text("keep me")
+        tool = CodeInterpreterTool()
+
+        result = tool.execute(
+            code=f"import io; io.open({str(marker)!r}, 'w').write('changed')"
+        )
+
+        assert result.success is False
+        assert marker.read_text() == "keep me"
+
     def test_no_code_provided(self):
         tool = CodeInterpreterTool()
         result = tool.execute(code="")

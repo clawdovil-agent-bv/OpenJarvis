@@ -2,8 +2,8 @@
 
 Security model (defense in depth):
 
-1. **AST allow/deny validation** (this module) rejects code *before* it runs:
-   imports of dangerous modules, dunder-attribute walks, and calls to
+1. **AST allowlist validation** (this module) rejects code *before* it runs:
+   imports outside a small supported set, private-attribute walks, and calls to
    ``eval``/``exec``/``compile``/``__import__``/``open``/``getattr`` &c. This
    replaces the old substring blocklist, which was trivially bypassed (e.g.
    ``getattr(__builtins__, 'sys'+'tem')`` or a simple space: ``eval ('...')``).
@@ -28,48 +28,11 @@ from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
-# Modules whose import is refused outright — they grant filesystem, process,
-# network, or interpreter-internal access that defeats the interpreter's intent.
-_BLOCKED_IMPORTS = frozenset(
-    {
-        "os",
-        "sys",
-        "subprocess",
-        "shutil",
-        "socket",
-        "ctypes",
-        "signal",
-        "importlib",
-        "builtins",
-        "pty",
-        "fcntl",
-        "multiprocessing",
-        "threading",
-        "asyncio",
-        "resource",
-        "mmap",
-        "gc",
-        "inspect",
-        "code",
-        "codeop",
-        "pdb",
-        "cProfile",
-        "pickle",
-        "shelve",
-        "marshal",
-        "webbrowser",
-        "http",
-        "urllib",
-        "ftplib",
-        "telnetlib",
-        "smtplib",
-        "requests",
-        "httpx",
-        "pathlib",
-        "glob",
-        "tempfile",
-    }
-)
+# Keep the supported import surface deliberately small. A denylist is not
+# sufficient here: otherwise an apparently harmless module can re-export a
+# dangerous one (for example ``platform.os.system``), and alternate file APIs
+# such as ``io.open`` remain available.
+_ALLOWED_IMPORTS = frozenset({"json", "math", "time"})
 
 # Names that must never be referenced or called (escape / IO primitives).
 _BLOCKED_NAMES = frozenset(
@@ -108,18 +71,18 @@ def _validate_ast(code: str) -> None:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                root = alias.name.split(".")[0]
-                if root in _BLOCKED_IMPORTS:
+                if alias.name not in _ALLOWED_IMPORTS:
                     raise UnsafeCodeError(f"import of '{alias.name}' is not allowed")
         elif isinstance(node, ast.ImportFrom):
-            root = (node.module or "").split(".")[0]
-            if root in _BLOCKED_IMPORTS:
+            if node.module not in _ALLOWED_IMPORTS or any(
+                alias.name == "*" for alias in node.names
+            ):
                 raise UnsafeCodeError(f"import from '{node.module}' is not allowed")
         elif isinstance(node, ast.Attribute):
-            # Dunder attribute access enables __class__ / __subclasses__ /
-            # __globals__ escape chains — refuse all of it.
-            if node.attr.startswith("__") and node.attr.endswith("__"):
-                raise UnsafeCodeError(f"dunder attribute access '{node.attr}' blocked")
+            # Private attributes include both dunder escape chains and module
+            # implementation details that may expose imported capabilities.
+            if node.attr.startswith("_"):
+                raise UnsafeCodeError(f"private attribute access '{node.attr}' blocked")
         elif isinstance(node, ast.Name):
             if node.id in _BLOCKED_NAMES:
                 raise UnsafeCodeError(f"use of '{node.id}' is not allowed")
@@ -129,17 +92,27 @@ def _validate_ast(code: str) -> None:
 
 def _child_limits() -> None:  # pragma: no cover - POSIX-only, runs in child
     """Apply resource limits in the forked child before exec (POSIX only)."""
-    try:
-        import resource
+    import resource
 
-        # 10s CPU, 512 MB address space, no new files written.
+    # Apply each protection independently. Some platforms expose a resource
+    # constant but reject changes to it (notably RLIMIT_AS on macOS); that must
+    # not prevent the remaining supported limits from being installed.
+    try:
+        os.setsid()
+    except OSError:
+        pass
+    try:
         resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+    except (OSError, ValueError):
+        pass
+    try:
         _mem = 512 * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (_mem, _mem))
+    except (OSError, ValueError):
+        pass
+    try:
         resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
-        os.setsid()
-    except Exception:
-        # Never let hardening failure crash the child before exec.
+    except (OSError, ValueError):
         pass
 
 
@@ -174,7 +147,6 @@ class CodeInterpreterTool(BaseTool):
                 "required": ["code"],
             },
             category="code",
-            required_capabilities=["code:execute"],
             metadata={"structured_allow_object_text": True},
         )
 
