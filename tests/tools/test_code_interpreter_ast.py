@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from openjarvis.tools.code_interpreter import UnsafeCodeError, _validate_ast
+from openjarvis.tools.code_interpreter import _validate_ast
 
 
 class TestCodeInterpreterValidation:
@@ -25,7 +25,10 @@ class TestCodeInterpreterValidation:
         ],
     )
     def test_dangerous_code_blocked(self, code):
-        with pytest.raises((UnsafeCodeError, SyntaxError)):
+        # The tools package is reloaded in parts of the full suite to restore
+        # registry decorators, so catch the stable public base rather than a
+        # pre-reload UnsafeCodeError class object.
+        with pytest.raises((ValueError, SyntaxError)):
             _validate_ast(code)
 
     @pytest.mark.parametrize(
