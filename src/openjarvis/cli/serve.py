@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 import click
@@ -26,6 +27,16 @@ from openjarvis.intelligence import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TOOLS = frozenset({"think", "calculator", "web_search"})
+
+
+def _resolve_server_cors_origins(configured: object) -> list[str]:
+    """Resolve server CORS origins with environment taking precedence."""
+    raw = os.environ.get("OPENJARVIS_CORS_ORIGINS", "").strip()
+    if raw:
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if isinstance(configured, list):
+        return [origin for origin in configured if isinstance(origin, str)]
+    return []
 
 
 def _resolve_allowed_tools(config: object) -> tuple[set[str], bool]:
@@ -202,8 +213,6 @@ def serve(
     # If cloud API keys are set, prepare a cloud engine. We build the
     # MultiEngine after local discovery so healthy local fallbacks such as
     # Ollama stay visible even when the configured preferred engine is MLX.
-    import os
-
     cloud_engine = None
     _has_cloud = (
         os.environ.get("OPENAI_API_KEY")
@@ -732,6 +741,7 @@ def serve(
         except Exception as exc:
             logger.debug("ChannelBridge init skipped: %s", exc)
 
+    cors_origins = _resolve_server_cors_origins(config.server.cors_origins)
     app = create_app(
         engine,
         model_name,
@@ -754,7 +764,7 @@ def serve(
         audit_logger=sec.audit_logger,
         api_key=api_key,
         webhook_config=webhook_config,
-        cors_origins=config.server.cors_origins,
+        cors_origins=cors_origins,
     )
 
     console.print(
@@ -773,7 +783,7 @@ def serve(
     except ValueError:
         _is_loop = bind_host in ("localhost", "")
 
-    if not _is_loop and "*" in config.server.cors_origins:
+    if not _is_loop and "*" in cors_origins:
         console.print(
             "[yellow bold]WARNING:[/yellow bold] Wildcard CORS with credentials "
             "enabled on non-loopback interface. This allows any website to make "

@@ -35,6 +35,81 @@ def _test_config():
 
 
 class TestCorsPreflightWithApiKey:
+    def test_environment_origins_used_when_factory_argument_is_omitted(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("OPENJARVIS_CORS_ORIGINS", "https://frontend.example")
+        app = create_app(
+            _make_engine(),
+            "test-model",
+            config=_test_config(),
+            api_key="oj_sk_test123",
+        )
+        client = TestClient(app)
+
+        resp = client.options(
+            "/v1/models",
+            headers={
+                "Origin": "https://frontend.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == (
+            "https://frontend.example"
+        )
+
+    def test_explicit_factory_origins_override_environment(self, monkeypatch):
+        monkeypatch.setenv("OPENJARVIS_CORS_ORIGINS", "https://env.example")
+        app = create_app(
+            _make_engine(),
+            "test-model",
+            config=_test_config(),
+            api_key="oj_sk_test123",
+            cors_origins=["https://explicit.example"],
+        )
+        client = TestClient(app)
+
+        explicit = client.options(
+            "/v1/models",
+            headers={
+                "Origin": "https://explicit.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        env = client.options(
+            "/v1/models",
+            headers={
+                "Origin": "https://env.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        assert explicit.status_code == 200
+        assert env.status_code == 400
+
+    def test_wildcard_origin_is_removed(self, monkeypatch):
+        monkeypatch.setenv("OPENJARVIS_CORS_ORIGINS", "*")
+        app = create_app(
+            _make_engine(),
+            "test-model",
+            config=_test_config(),
+            api_key="oj_sk_test123",
+        )
+        client = TestClient(app)
+
+        resp = client.options(
+            "/v1/models",
+            headers={
+                "Origin": "https://untrusted.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        assert resp.status_code == 400
+        assert "access-control-allow-origin" not in resp.headers
+
     def test_preflight_gets_cors_headers_not_401(self):
         app = create_app(
             _make_engine(),

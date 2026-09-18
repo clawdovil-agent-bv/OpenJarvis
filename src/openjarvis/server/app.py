@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import pathlib
 import threading
 import time
@@ -252,9 +253,7 @@ def create_app(
     # should be set to your real frontend origin(s) only — never "*", which
     # combined with allow_credentials=True would let any website call the API
     # in the user's authenticated context.
-    import os as _os
-
-    _env_origins = _os.environ.get("OPENJARVIS_CORS_ORIGINS", "").strip()
+    _env_origins = os.environ.get("OPENJARVIS_CORS_ORIGINS", "").strip()
     if cors_origins is not None:
         _origins = cors_origins
     elif _env_origins:
