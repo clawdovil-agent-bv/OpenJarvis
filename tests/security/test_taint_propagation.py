@@ -77,5 +77,32 @@ class TestExecutorSessionTaint:
         ex = ToolExecutor([web])
         r = ex.execute(ToolCall(id="1", name="web_page", arguments="{}"))
         assert r.success
-        if r.metadata.get("injection_flagged"):
-            assert "UNTRUSTED EXTERNAL CONTENT" in r.content
+        assert r.metadata["injection_flagged"] == "high"
+        assert "UNTRUSTED EXTERNAL CONTENT" in r.content
+
+    def test_new_session_does_not_inherit_unrelated_taint(self):
+        from openjarvis.core.types import ToolCall
+        from openjarvis.tools._stubs import ToolExecutor
+
+        web = _FakeTool("web_search", "ok", is_local=False)
+        ex = ToolExecutor([web])
+        ex.begin_session(["Contact the user at hello@example.com"])
+        blocked = ex.execute(ToolCall(id="1", name="web_search", arguments="{}"))
+        ex.begin_session(["What is the weather?"])
+        allowed = ex.execute(ToolCall(id="2", name="web_search", arguments="{}"))
+
+        assert blocked.success is False
+        assert allowed.success is True
+
+    def test_session_history_rehydrates_taint(self):
+        from openjarvis.core.types import ToolCall
+        from openjarvis.tools._stubs import ToolExecutor
+
+        http = _FakeTool("http_request", "ok", is_local=False)
+        ex = ToolExecutor([http])
+        ex.begin_session(["Earlier tool result: token=secret-value-123"])
+
+        result = ex.execute(ToolCall(id="1", name="http_request", arguments="{}"))
+
+        assert result.success is False
+        assert "Taint violation" in result.content

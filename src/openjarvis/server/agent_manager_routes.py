@@ -1321,6 +1321,12 @@ async def _stream_managed_agent(
         rate_limiter=getattr(app_state, "rate_limiter", None),
         agent_id=agent_id,
     )
+    # The executor is request-local, but the conversation is not: seed taint
+    # from replayed history so data returned by a tool in an earlier request
+    # remains protected in this turn.
+    stream_tool_executor.begin_session(
+        [message.text for message in llm_messages if message.text]
+    )
 
     # Forward any per-agent sampler params (repetition_penalty, top_p, …) so
     # locally-hosted models can be tuned per agent (#386).

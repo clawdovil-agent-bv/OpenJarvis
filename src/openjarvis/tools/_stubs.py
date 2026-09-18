@@ -223,6 +223,7 @@ class ToolExecutor:
             self._session_taint: Any = TaintSet()
         except Exception:
             self._session_taint = None
+        self._taint_lock = threading.Lock()
         # Scan untrusted (non-local) tool output for prompt-injection before it
         # is handed back to the model. Off unless the scanner imports cleanly.
         try:
@@ -231,6 +232,21 @@ class ToolExecutor:
             self._injection_scanner: Any = InjectionScanner()
         except Exception:
             self._injection_scanner = None
+
+    def begin_session(self, content: List[str] | None = None) -> None:
+        """Reset taint for one conversation and seed it from its history."""
+        try:
+            from openjarvis.security.taint import TaintSet, auto_detect_taint
+
+            taint = TaintSet()
+            for text in content or []:
+                if text:
+                    taint = taint.union(auto_detect_taint(str(text)))
+            with self._taint_lock:
+                self._session_taint = taint
+        except ImportError:
+            with self._taint_lock:
+                self._session_taint = None
 
     def execute(self, tool_call: ToolCall) -> ToolResult:
         """Parse arguments, dispatch to tool, measure latency, emit events."""
@@ -355,8 +371,10 @@ class ToolExecutor:
 
             call_taint = params.get("_taint") if isinstance(params, dict) else None
             effective = call_taint if isinstance(call_taint, TaintSet) else TaintSet()
-            if isinstance(self._session_taint, TaintSet):
-                effective = effective.union(self._session_taint)
+            with self._taint_lock:
+                session_taint = self._session_taint
+            if isinstance(session_taint, TaintSet):
+                effective = effective.union(session_taint)
             if effective:
                 violation = check_taint(tool_call.name, effective)
                 if violation:
@@ -464,8 +482,9 @@ class ToolExecutor:
                 detected = auto_detect_taint(result.content)
                 if detected and detected.labels:
                     result.metadata["_taint"] = detected
-                    if isinstance(self._session_taint, TaintSet):
-                        self._session_taint = self._session_taint.union(detected)
+                    with self._taint_lock:
+                        if isinstance(self._session_taint, TaintSet):
+                            self._session_taint = self._session_taint.union(detected)
             except ImportError:
                 pass
 
