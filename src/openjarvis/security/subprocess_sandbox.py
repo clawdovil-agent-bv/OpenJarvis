@@ -95,7 +95,8 @@ def run_sandboxed(
     try:
         proc = subprocess.Popen(
             command,
-            shell=True,
+            # This API explicitly runs caller-provided shell commands.
+            shell=True,  # nosec B602
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

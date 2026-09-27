@@ -479,9 +479,11 @@ def _hash_table_state(rows: List[List[Any]]) -> str:
     row_hashes = []
     for row in rows:
         concat = ",".join(str(v) if v is not None else "NULL" for v in row)
-        row_hashes.append(hashlib.md5(concat.encode()).hexdigest())
+        row_hashes.append(
+            hashlib.md5(concat.encode(), usedforsecurity=False).hexdigest()
+        )
     row_hashes.sort()
-    return hashlib.md5("".join(row_hashes).encode()).hexdigest()
+    return hashlib.md5("".join(row_hashes).encode(), usedforsecurity=False).hexdigest()
 
 
 def _compare_table_states(

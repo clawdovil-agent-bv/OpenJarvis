@@ -178,7 +178,8 @@ class ShellExecTool(BaseTool):
         try:
             result = subprocess.run(
                 command,
-                shell=True,
+                # This tool executes shell commands after its confirmation gate.
+                shell=True,  # nosec B602
                 capture_output=True,
                 text=True,
                 timeout=timeout,

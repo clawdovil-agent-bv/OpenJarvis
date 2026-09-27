@@ -277,7 +277,8 @@ class WhatsAppConnector(BaseConnector):
             return None
 
         content = "\n".join(lines)
-        doc_id = f"whatsapp:{hashlib.sha1(path.name.encode()).hexdigest()[:16]}"
+        path_hash = hashlib.sha1(path.name.encode(), usedforsecurity=False)
+        doc_id = f"whatsapp:{path_hash.hexdigest()[:16]}"
 
         return Document(
             doc_id=doc_id,
