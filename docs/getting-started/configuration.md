@@ -114,7 +114,7 @@ host = "http://localhost:30000"
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `default` | string | Auto-detected | Default engine backend. One of: `ollama`, `vllm`, `llamacpp`, `sglang`, `cloud`. Set automatically by `jarvis init` based on hardware detection. |
+| `default` | string | Auto-detected | Default engine backend. Registered keys include `ollama`, `vllm`, `sglang`, `llamacpp`, `mlx`, `lmstudio`, `exo`, `nexa`, `uzu`, `apple_fm`, `afm`, `lemonade`, `nim`, `cloud`, `litellm`, and `gemma_cpp`. Optional engines are available only when their dependencies are installed. |
 
 **`[engine.ollama]`:**
 
@@ -704,20 +704,23 @@ graph TD
     A[detect_hardware] --> B{GPU detected?}
     B -->|No| C[llamacpp]
     B -->|Yes| D{GPU vendor?}
-    D -->|Apple| E[ollama]
+    D -->|Apple| E[mlx]
     D -->|NVIDIA| F{Datacenter GPU?}
-    D -->|AMD| G[vllm]
+    D -->|AMD| G{Datacenter GPU?}
     F -->|Yes: A100, H100, H200, L40, A10, A30| H[vllm]
     F -->|No: consumer GPU| I[ollama]
+    G -->|Yes: MI300, MI325, MI350, MI355| J[vllm]
+    G -->|No: consumer GPU| K[lemonade]
 ```
 
 | Hardware | Recommended Engine | Reason |
 |----------|--------------------|--------|
 | No GPU | `llamacpp` | Efficient CPU inference with GGUF quantized models |
-| Apple Silicon | `ollama` | Native Metal acceleration, easy model management |
+| Apple Silicon | `mlx` | Native inference through the MLX framework |
 | NVIDIA consumer GPU (RTX 3090, 4090, etc.) | `ollama` | Simple setup, good performance for single-user |
 | NVIDIA datacenter GPU (A100, H100, H200, L40, A10, A30) | `vllm` | High-throughput batched serving, continuous batching |
-| AMD GPU | `vllm` | ROCm support via vLLM |
+| AMD consumer GPU | `lemonade` | Optimized support for AMD GPUs and Ryzen AI NPUs |
+| AMD datacenter GPU (MI300, MI325, MI350, MI355) | `vllm` | High-throughput serving on supported datacenter accelerators |
 
 ---
 
@@ -725,19 +728,25 @@ graph TD
 
 ### Apple Silicon Mac
 
+Start an MLX server with the same model ID used in the configuration:
+
+```bash
+jarvis host mlx-community/Qwen2.5-7B-4bit --backend mlx --port 8080
+```
+
 ```toml
 # ~/.openjarvis/config.toml
 # Apple Silicon MacBook Pro (M3 Max, 128 GB unified memory)
 
 [engine]
-default = "ollama"
+default = "mlx"
 
-[engine.ollama]
-host = "http://localhost:11434"
+[engine.mlx]
+host = "http://localhost:8080"
 
 [intelligence]
-default_model = "qwen3:8b"
-fallback_model = "llama3.2:3b"
+default_model = "mlx-community/Qwen2.5-7B-4bit"
+fallback_model = ""
 temperature = 0.7
 max_tokens = 1024
 
@@ -1120,7 +1129,9 @@ OpenJarvis respects the following environment variables:
 | `MINIMAX_API_KEY` | API key for MiniMax cloud inference. Required for the `cloud` engine with MiniMax models (MiniMax-M3, MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5, MiniMax-M2.5-highspeed). |
 | `TAVILY_API_KEY` | API key for the Tavily web search engine. Optional — when set, `auto` engine selection prefers Tavily. |
 | `YOUDOTCOM_API_KEY` | API key for the You.com web search engine. Optional — raises the keyless free-tier limits and enables You.com Contents extraction for URL queries. |
-| `OPENJARVIS_WEB_SEARCH_ENGINE` | Web search engine for the `web_search` tool: `auto` (default), `youcom`, `tavily`, or `duckduckgo`. |
+| `SERPLY_API_KEY` | API key for the Serply web search engine, which proxies Google. Optional. When set and no other search key is, `auto` engine selection prefers Serply over the keyless tier. Keys: [serply.io](https://serply.io). |
+| `SERPLY_PROXY_LOCATION` | Two-letter country code asking Serply for that country's Google result set, for example `DE`. Optional. Unset means the API answers from its own default region. See [serply.io/docs](https://serply.io/docs). |
+| `OPENJARVIS_WEB_SEARCH_ENGINE` | Web search engine for the `web_search` tool: `auto` (default), `youcom`, `tavily`, `serply`, or `duckduckgo`. |
 
 ## Next Steps
 

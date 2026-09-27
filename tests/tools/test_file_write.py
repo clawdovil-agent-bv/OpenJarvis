@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from openjarvis.tools.file_write import FileWriteTool
 
 
@@ -82,6 +84,34 @@ class TestFileWriteTool:
         result = tool.execute(path=str(f), content='{"token": "abc"}')
         assert result.success is False
         assert "sensitive" in result.content.lower()
+
+    @pytest.mark.parametrize(
+        "alias_name,target_name", [("notes.txt", ".env"), (".env", "notes.txt")]
+    )
+    @pytest.mark.parametrize("target_exists", [True, False])
+    @pytest.mark.parametrize("mode", ["write", "append"])
+    def test_blocks_symlink_alias_to_sensitive_file(
+        self, tmp_path, alias_name, target_name, target_exists, mode
+    ):
+        sensitive = tmp_path / target_name
+        if target_exists:
+            sensitive.write_text("SECRET=foo", encoding="utf-8")
+        alias = tmp_path / alias_name
+        try:
+            alias.symlink_to(sensitive)
+        except OSError:
+            pytest.skip("filesystem does not permit creating symlinks")
+
+        result = FileWriteTool().execute(
+            path=str(alias), content="SECRET=bar", mode=mode
+        )
+
+        assert result.success is False
+        assert "sensitive" in result.content.lower()
+        if target_exists:
+            assert sensitive.read_text(encoding="utf-8") == "SECRET=foo"
+        else:
+            assert not sensitive.exists()
 
     def test_allowed_dirs_blocks(self, tmp_path):
         f = tmp_path / "test.txt"

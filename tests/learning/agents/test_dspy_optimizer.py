@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
@@ -88,3 +89,58 @@ class TestDSPyOptimizerTraceConversion:
                 result = optimizer.optimize(mock_store)
                 assert result["status"] == "completed"
                 assert "config_updates" in result
+
+    def test_extracts_demos_from_compiled_chain_of_thought(self, monkeypatch) -> None:
+        """DSPy stores compiled ChainOfThought demos on its inner predictor."""
+        import openjarvis.learning.agents.dspy_optimizer as mod
+        from openjarvis.core.config import DSPyOptimizerConfig
+
+        class FakeExample:
+            def __init__(self, *, question: str, answer: str) -> None:
+                self.question = question
+                self.answer = answer
+
+            def with_inputs(self, *names: str):
+                assert names == ("question",)
+                return self
+
+        class FakeModule:
+            pass
+
+        class FakeChainOfThought:
+            def __init__(self, signature: str) -> None:
+                assert signature == "question -> answer"
+
+        class FakeBootstrapFewShot:
+            def __init__(self, **kwargs) -> None:
+                pass
+
+            def compile(self, program, *, trainset):
+                assert isinstance(program.generate, FakeChainOfThought)
+                assert trainset[0].question == "How are you?"
+                demos = [FakeExample(question="How are you?", answer="Well")]
+                return SimpleNamespace(
+                    generate=SimpleNamespace(predict=SimpleNamespace(demos=demos))
+                )
+
+        fake_dspy = SimpleNamespace(
+            Example=FakeExample,
+            Module=FakeModule,
+            ChainOfThought=FakeChainOfThought,
+            BootstrapFewShot=FakeBootstrapFewShot,
+        )
+        monkeypatch.setattr(mod, "dspy", fake_dspy)
+        monkeypatch.setattr(mod, "HAS_DSPY", True)
+
+        optimizer = mod.DSPyAgentOptimizer(
+            DSPyOptimizerConfig(optimizer="BootstrapFewShot", min_traces=1)
+        )
+        trace = SimpleNamespace(query="How are you?", result="Well", feedback=1.0)
+        store = SimpleNamespace(list_traces=lambda **kwargs: [trace])
+
+        result = optimizer.optimize(store)
+
+        assert result["status"] == "completed"
+        assert result["config_updates"]["few_shot_examples"] == [
+            {"input": "How are you?", "output": "Well"}
+        ]

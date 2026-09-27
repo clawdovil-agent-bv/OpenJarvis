@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import pathlib
 import threading
 import time
@@ -247,10 +248,18 @@ def create_app(
 
     from fastapi.middleware.cors import CORSMiddleware
 
-    _origins = (
-        cors_origins
-        if cors_origins is not None
-        else [
+    # Allow deployments to pin the exact browser origins via
+    # OPENJARVIS_CORS_ORIGINS (comma-separated). On an exposed server this
+    # should be set to your real frontend origin(s) only — never "*", which
+    # combined with allow_credentials=True would let any website call the API
+    # in the user's authenticated context.
+    _env_origins = os.environ.get("OPENJARVIS_CORS_ORIGINS", "").strip()
+    if cors_origins is not None:
+        _origins = cors_origins
+    elif _env_origins:
+        _origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
+    else:
+        _origins = [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
             "http://localhost:5174",
@@ -264,7 +273,8 @@ def create_app(
             "http://tauri.localhost",
             "https://tauri.localhost",
         ]
-    )
+    # Defense in depth: a literal "*" with credentials is unsafe. Refuse it.
+    _origins = [o for o in _origins if o != "*"]
     # Store dependencies in app state
     app.state.engine = engine
     app.state.model = model

@@ -15,7 +15,7 @@ from rich.table import Table
 from openjarvis.cli._banner import print_banner
 from openjarvis.cli._tool_names import resolve_tool_names
 from openjarvis.cli.hints import hint_no_engine
-from openjarvis.core.config import load_config
+from openjarvis.core.config import JarvisConfig, load_config
 from openjarvis.core.events import EventBus, EventType
 from openjarvis.core.types import Message, Role
 from openjarvis.engine import (
@@ -53,6 +53,23 @@ LOCAL_ENGINES = {
 }
 
 
+def _resolve_research_model(model_name: str | None, config: JarvisConfig | None) -> str:
+    """Pick the planner model for ``jarvis ask --research``.
+
+    Mirrors the server's ``_resolve_planner_config`` order: explicit ``-m``,
+    then ``[deep_research].model``, then the config default model, and only
+    then the legacy ``gemma4:31b`` fallback. Before this the CLI jumped
+    straight to the legacy fallback, which 404s on any install that never
+    pulled gemma4.
+    """
+    from openjarvis.agents.research_loop import DEFAULT_PLANNER_MODEL
+
+    candidates = [model_name]
+    if config is not None:
+        candidates += [config.deep_research.model, config.intelligence.default_model]
+    return next((m for m in candidates if m), DEFAULT_PLANNER_MODEL)
+
+
 def _run_research(
     *,
     query_text: str,
@@ -61,6 +78,7 @@ def _run_research(
     knowledge_db: str | None,
     output_json: bool,
     console: Console,
+    config: JarvisConfig | None = None,
 ) -> None:
     """Run the hybrid-search research loop and print the result to the console.
 
@@ -72,7 +90,7 @@ def _run_research(
     from rich.markdown import Markdown
     from rich.theme import Theme
 
-    from openjarvis.agents.research_loop import DEFAULT_PLANNER_MODEL, ResearchAgent
+    from openjarvis.agents.research_loop import ResearchAgent
     from openjarvis.connectors.embeddings import OllamaEmbedder
     from openjarvis.connectors.hybrid_search import HybridSearch
     from openjarvis.connectors.store import KnowledgeStore
@@ -113,7 +131,7 @@ def _run_research(
         )
         embedder = None
 
-    planner_model = model_name or DEFAULT_PLANNER_MODEL
+    planner_model = _resolve_research_model(model_name, config)
     logger.debug("research: planner_model=%s", planner_model)
 
     # ---- Output styling --------------------------------------------------
@@ -769,6 +787,15 @@ def _print_profile(
         "(overrides config). Pass 'none' to disable all persona files."
     ),
 )
+@click.option(
+    "--route",
+    "--router-policy",
+    "router_policy",
+    default=None,
+    help=(
+        "Routing policy to select model (e.g. heuristic, learned). Overrides config."
+    ),
+)
 @click.pass_context
 def ask(
     ctx: click.Context,
@@ -788,6 +815,7 @@ def ask(
     persona_name: str | None,
     image_paths: tuple[str, ...] = (),
     capture_screen: bool = False,
+    router_policy: str | None = None,
 ) -> None:
     """Ask Jarvis a question."""
     quiet = (ctx.obj or {}).get("quiet", False) or output_json
@@ -927,6 +955,7 @@ def ask(
             knowledge_db=knowledge_db,
             output_json=output_json,
             console=console,
+            config=config,
         )
         return
 
@@ -957,9 +986,77 @@ def ask(
     for ek, model_ids in all_models.items():
         merge_discovered_models(ek, model_ids)
 
-    # Resolve model via config fallback chain
+    # Resolve model via learning router policy or config fallback chain
     if model_name is None:
-        model_name = config.intelligence.default_model
+        effective_router_policy = router_policy
+        if not effective_router_policy and getattr(config.learning, "enabled", False):
+            effective_router_policy = getattr(config.learning.routing, "policy", "")
+
+        if effective_router_policy:
+            try:
+                from openjarvis.core.registry import RouterPolicyRegistry
+                from openjarvis.learning import ensure_registered
+                from openjarvis.learning.routing.router import build_routing_context
+
+                ensure_registered()
+                configured_default = config.intelligence.default_model
+                configured_fallback = config.intelligence.fallback_model
+                engine_models = all_models.get(engine_name, [])
+                available_models = set(engine_models)
+                # A configured fallback may belong to another engine.
+                candidates = list(
+                    dict.fromkeys(
+                        [
+                            m
+                            for m in [
+                                configured_default,
+                                *engine_models,
+                                configured_fallback,
+                            ]
+                            if m and m in available_models
+                        ]
+                    )
+                )
+                if candidates and RouterPolicyRegistry.contains(
+                    effective_router_policy
+                ):
+                    preferred_model = (
+                        configured_default
+                        if configured_default in available_models
+                        else candidates[0]
+                    )
+                    fallback_model = (
+                        configured_fallback
+                        if configured_fallback in available_models
+                        else candidates[0]
+                    )
+                    policy = RouterPolicyRegistry.create(
+                        effective_router_policy,
+                        available_models=candidates,
+                        default_model=preferred_model,
+                        fallback_model=fallback_model,
+                    )
+                    routing_context = build_routing_context(
+                        query_text,
+                        model=preferred_model,
+                    )
+                    selected = policy.select_model(routing_context)
+                    if selected in candidates:
+                        logger.info(
+                            "Router (%s) selected model %s for query",
+                            effective_router_policy,
+                            selected,
+                        )
+                        model_name = selected
+            except Exception as exc:
+                logger.debug(
+                    "Failed to route model via %s: %s",
+                    effective_router_policy,
+                    exc,
+                )
+
+        if model_name is None:
+            model_name = config.intelligence.default_model
     if not model_name:
         # Try first available from engine
         engine_models = all_models.get(engine_name, [])

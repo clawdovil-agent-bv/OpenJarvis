@@ -7,6 +7,7 @@
 # Usage:
 #   ./download-ollama.sh                  # auto-detect current platform
 #   ./download-ollama.sh aarch64-apple-darwin
+#   ./download-ollama.sh universal-apple-darwin
 #   ./download-ollama.sh x86_64-unknown-linux-gnu
 #
 # Ollama distributes platform binaries as archives (.tgz / .tar.zst).
@@ -128,6 +129,14 @@ if [ -z "$OLLAMA_BIN" ]; then
     echo "Could not find ollama binary in archive. Contents:"
     find "$TMPDIR" -type f | head -20
     exit 1
+fi
+
+# Tauri's universal macOS bundle needs both architectures in a single sidecar.
+if [ "$TARGET" = "universal-apple-darwin" ]; then
+    if ! lipo "$OLLAMA_BIN" -verify_arch arm64 x86_64; then
+        echo "Ollama's darwin archive does not contain a universal arm64+x86_64 binary"
+        exit 1
+    fi
 fi
 
 cp "$OLLAMA_BIN" "$OUT_FILE"

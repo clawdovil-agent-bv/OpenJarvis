@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from openjarvis.tools.apply_patch import ApplyPatchTool
 
 
@@ -132,6 +134,31 @@ class TestApplyPatchTool:
         result = tool.execute(patch=patch, path=str(f))
         assert result.success is False
         assert "sensitive" in result.content.lower()
+
+    @pytest.mark.parametrize(
+        "alias_name,target_name", [("notes.txt", ".env"), (".env", "notes.txt")]
+    )
+    @pytest.mark.parametrize("explicit_path", [True, False])
+    def test_blocks_symlink_alias_to_sensitive_file(
+        self, tmp_path, alias_name, target_name, explicit_path
+    ):
+        sensitive = tmp_path / target_name
+        sensitive.write_text("SECRET=foo\n", encoding="utf-8")
+        alias = tmp_path / alias_name
+        try:
+            alias.symlink_to(sensitive)
+        except OSError:
+            pytest.skip("filesystem does not permit creating symlinks")
+        patch = f"--- {alias}\n+++ {alias}\n@@ -1 +1 @@\n-SECRET=foo\n+SECRET=bar\n"
+
+        result = ApplyPatchTool().execute(
+            patch=patch, path=str(alias) if explicit_path else None
+        )
+
+        assert result.success is False
+        assert "sensitive" in result.content.lower()
+        assert sensitive.read_text(encoding="utf-8") == "SECRET=foo\n"
+        assert not alias.with_suffix(alias.suffix + ".bak").exists()
 
     def test_auto_detect_path_from_patch_header(self, tmp_path):
         f = tmp_path / "auto.txt"

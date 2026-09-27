@@ -42,9 +42,15 @@ def test_local_build_does_not_require_updater_signing_key() -> None:
     assert config["bundle"]["createUpdaterArtifacts"] is False
 
 
-def test_release_workflow_explicitly_enables_updater_artifacts() -> None:
-    """Signed releases must still publish updater signatures and latest.json."""
+def test_release_workflow_passes_updater_config_to_tauri() -> None:
+    """The CLI and action must read the release override to sign updater artifacts."""
     workflow = DESKTOP_WORKFLOW.read_text(encoding="utf-8")
 
-    assert '"createUpdaterArtifacts":true' in workflow
+    assert "createUpdaterArtifacts: true" in workflow
+    assert "externalBin: ['binaries/ollama']" in workflow
+    assert (
+        "args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json"
+        in workflow
+    )
+    assert "TAURI_CONFIG:" not in workflow
     assert "uploadUpdaterJson: true" in workflow

@@ -113,6 +113,7 @@ class OperativeAgent(ToolUsingAgent):
             system_prompt=system_prompt,
             session_messages=session_messages,
         )
+        self._begin_tool_session_from_messages(messages)
 
         # 5. Run function-calling tool loop
         openai_tools = self._executor.get_openai_tools() if self._tools else []

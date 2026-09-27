@@ -6,7 +6,7 @@ from openjarvis.core.config import GpuInfo, HardwareInfo, recommend_model
 
 
 class TestRecommendModelTiers:
-    """Tier-based model recommendation (Qwen3.5 MoE)."""
+    """Tier-based model recommendation (dense Qwen3.5)."""
 
     def test_8gb_ram_picks_qwen35_2b(self) -> None:
         hw = HardwareInfo(platform="linux", ram_gb=8.0, gpu=None)

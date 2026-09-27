@@ -184,28 +184,36 @@ class TestCloudModelSpecs:
 
 
 class TestQwen35ModelSpecs:
-    """Verify Qwen3.5 MoE model entries."""
+    """Verify dense and MoE Qwen3.5 model entries."""
+
+    @pytest.mark.parametrize(
+        ("model_id", "parameter_count_b"),
+        [
+            ("qwen3.5:0.8b", 0.8),
+            ("qwen3.5:2b", 2.0),
+            ("qwen3.5:4b", 4.0),
+            ("qwen3.5:9b", 9.0),
+            ("qwen3.5:27b", 27.0),
+        ],
+    )
+    def test_small_dense_models_have_no_active_parameter_count(
+        self, model_id: str, parameter_count_b: float
+    ) -> None:
+        spec = _get_spec(model_id)
+        assert spec.parameter_count_b == parameter_count_b
+        assert spec.active_parameter_count_b is None
+        assert spec.metadata["architecture"] == "dense"
 
     def test_qwen35_2b(self) -> None:
         spec = _get_spec("qwen3.5:2b")
-        assert spec.parameter_count_b == 2.0
-        assert spec.active_parameter_count_b == 0.4
         assert spec.context_length == 131072
         assert spec.provider == "alibaba"
-        assert spec.metadata["architecture"] == "moe"
         for e in ("ollama", "vllm", "llamacpp", "sglang"):
             assert e in spec.supported_engines
 
     def test_qwen35_9b(self) -> None:
         spec = _get_spec("qwen3.5:9b")
-        assert spec.parameter_count_b == 9.0
-        assert spec.active_parameter_count_b == 1.5
         assert spec.context_length == 131072
-
-    def test_qwen35_27b(self) -> None:
-        spec = _get_spec("qwen3.5:27b")
-        assert spec.parameter_count_b == 27.0
-        assert spec.active_parameter_count_b == 3.0
 
     def test_qwen35_35b(self) -> None:
         spec = _get_spec("qwen3.5:35b")
@@ -300,9 +308,6 @@ class TestModelDiscovery:
             "gpt-oss:120b",
             "glm-4.7-flash",
             "trinity-mini",
-            "qwen3.5:2b",
-            "qwen3.5:9b",
-            "qwen3.5:27b",
             "qwen3.5:35b",
             "qwen3.5:122b",
             "qwen3.5:397b",

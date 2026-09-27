@@ -5,8 +5,23 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.tools.web_search import WebSearchTool
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_serply_key(monkeypatch):
+    """Keep the Serply env out of every test in this module.
+
+    Tests here clear the Tavily and You.com keys case by case, so a third
+    engine key read from the ambient environment would flip ``auto`` and turn
+    the suite red on a machine that happens to have one set, which is the
+    failure mode reported in #972. Tests that want the key set it themselves.
+    """
+    monkeypatch.delenv("SERPLY_API_KEY", raising=False)
+    monkeypatch.delenv("SERPLY_PROXY_LOCATION", raising=False)
 
 
 class TestWebSearchTool:
@@ -413,7 +428,7 @@ class TestUrlFetching:
         mock_resp.text = "<html><body><p>Hello world</p></body></html>"
         mock_resp.headers = {"content-type": "text/html"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr(httpx.Client, "get", MagicMock(return_value=mock_resp))
 
         content = WebSearchTool._fetch_url("https://example.com")
         assert "Hello world" in content
@@ -426,7 +441,7 @@ class TestUrlFetching:
         mock_resp.text = "<html><script>var x=1;</script><body>Content</body></html>"
         mock_resp.headers = {"content-type": "text/html"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr(httpx.Client, "get", MagicMock(return_value=mock_resp))
 
         content = WebSearchTool._fetch_url("https://example.com")
         assert "var x" not in content
@@ -440,7 +455,7 @@ class TestUrlFetching:
         mock_resp.text = "<p>" + "x" * 10000 + "</p>"
         mock_resp.headers = {"content-type": "text/html"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr(httpx.Client, "get", MagicMock(return_value=mock_resp))
 
         content = WebSearchTool._fetch_url("https://example.com", max_chars=100)
         assert len(content) < 200
@@ -454,11 +469,137 @@ class TestUrlFetching:
         mock_resp.text = "%PDF-1.4 binary data"
         mock_resp.headers = {"content-type": "application/pdf"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr(httpx.Client, "get", MagicMock(return_value=mock_resp))
 
         content = WebSearchTool._fetch_url("https://example.com/file.pdf")
         assert "PDF" in content
         assert "cannot be read" in content
+
+
+class TestFetchRedirectSession:
+    @pytest.fixture(autouse=True)
+    def _guard(self, monkeypatch):
+        import openjarvis.tools.web_search as web_search
+
+        guard = MagicMock(return_value=None)
+        monkeypatch.setattr(web_search, "check_ssrf", guard)
+        return guard
+
+    @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+    def test_redirect_keeps_cookie_and_closes_client(self, monkeypatch, status):
+        """Keep the actual client lifecycle so a fresh client per hop fails."""
+        import httpx
+
+        requests = []
+        closed = []
+        exit_transport = httpx.HTTPTransport.__exit__
+
+        def close_transport(transport, *args):
+            closed.append(transport)
+            return exit_transport(transport, *args)
+
+        def handler(transport, request):
+            requests.append(request)
+            if request.url.path == "/start":
+                return httpx.Response(
+                    status,
+                    headers={
+                        "location": "/article",
+                        "set-cookie": "session=redirect; Path=/; Secure",
+                    },
+                )
+            if request.headers.get("cookie") != "session=redirect":
+                return httpx.Response(403)
+            return httpx.Response(200, text="article with redirect cookie")
+
+        monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handler)
+        monkeypatch.setattr(httpx.HTTPTransport, "__exit__", close_transport)
+
+        assert WebSearchTool._fetch_url("https://public.example/start") == (
+            "article with redirect cookie"
+        )
+        assert len(requests) == 2
+        assert closed
+
+    @pytest.mark.parametrize(
+        "destination",
+        ["https://other.example/article", "http://public.example/article"],
+    )
+    def test_cookie_is_scoped_to_host_and_fetch(self, monkeypatch, destination):
+        import httpx
+
+        requests = []
+
+        def handler(transport, request):
+            requests.append(request)
+            if request.url.path == "/start":
+                return httpx.Response(
+                    302,
+                    headers={
+                        "location": destination,
+                        "set-cookie": "session=private; Path=/; Secure",
+                    },
+                )
+            return httpx.Response(200, text="article")
+
+        monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handler)
+
+        assert WebSearchTool._fetch_url("https://public.example/start") == "article"
+        assert WebSearchTool._fetch_url("https://public.example/article") == "article"
+        assert [request.headers.get("cookie") for request in requests] == [
+            None,
+            None,
+            None,
+        ]
+
+    def test_private_redirect_with_cookie_is_never_requested(self, monkeypatch, _guard):
+        import httpx
+
+        requests = []
+
+        def handler(transport, request):
+            requests.append(request)
+            return httpx.Response(
+                302,
+                headers={
+                    "location": "http://127.0.0.1/admin",
+                    "set-cookie": "session=private; Path=/",
+                },
+            )
+
+        _guard.side_effect = [None, "private IP blocked"]
+        monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handler)
+
+        with pytest.raises(ValueError, match="private IP blocked"):
+            WebSearchTool._fetch_url("https://public.example/start")
+        assert len(requests) == 1
+        assert [call.args[0] for call in _guard.call_args_list] == [
+            "https://public.example/start",
+            "http://127.0.0.1/admin",
+        ]
+
+    @pytest.mark.parametrize("redirects", [5, 6])
+    def test_redirect_limit(self, monkeypatch, _guard, redirects):
+        import httpx
+
+        requests = []
+
+        def handler(transport, request):
+            requests.append(request)
+            hop = int(request.url.path.removeprefix("/"))
+            if hop < redirects:
+                return httpx.Response(302, headers={"location": f"/{hop + 1}"})
+            return httpx.Response(200, text="article")
+
+        monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handler)
+
+        if redirects == 5:
+            assert WebSearchTool._fetch_url("https://public.example/0") == "article"
+        else:
+            with pytest.raises(ValueError, match="maximum of 5 redirects"):
+                WebSearchTool._fetch_url("https://public.example/0")
+        assert len(requests) == 6
+        assert _guard.call_count == 6
 
 
 class TestExecuteWithUrl:
@@ -477,7 +618,7 @@ class TestExecuteWithUrl:
         mock_resp.text = "<html><body>Page content here</body></html>"
         mock_resp.headers = {"content-type": "text/html"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr(httpx.Client, "get", MagicMock(return_value=mock_resp))
 
         tool = WebSearchTool(api_key="test-key")
         result = tool.execute(query="https://example.com/article")
@@ -494,7 +635,7 @@ class TestExecuteWithUrl:
         mock_resp.text = "<html><body>Article text</body></html>"
         mock_resp.headers = {"content-type": "text/html"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr(httpx.Client, "get", MagicMock(return_value=mock_resp))
 
         tool = WebSearchTool(api_key="test-key")
         result = tool.execute(query="Summarize https://example.com/article please")
@@ -522,7 +663,7 @@ class TestExecuteWithUrl:
 
         self._mock_ssrf(monkeypatch)
         monkeypatch.setattr(
-            httpx,
+            httpx.Client,
             "get",
             MagicMock(side_effect=httpx.HTTPError("Connection failed")),
         )
@@ -531,6 +672,97 @@ class TestExecuteWithUrl:
         result = tool.execute(query="https://example.com/broken")
         assert result.success is False
         assert "Failed to fetch URL" in result.content
+
+    def test_url_redirect_to_private_ip_is_blocked(self, monkeypatch):
+        """Every URL redirect hop must be checked for SSRF."""
+        import httpx
+
+        import openjarvis.tools.web_search as _ws
+
+        requests = []
+
+        def handler(request):
+            requests.append(str(request.url))
+            if request.url.host == "public.example.com":
+                return httpx.Response(
+                    302,
+                    headers={"location": "http://127.0.0.1/admin"},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                text="internal response",
+                headers={"content-type": "text/html"},
+                request=request,
+            )
+
+        guard = MagicMock(
+            side_effect=[None, None, "URL resolves to private IP: 127.0.0.1"]
+        )
+        monkeypatch.setattr(
+            httpx.HTTPTransport,
+            "handle_request",
+            lambda self, request: handler(request),
+        )
+        monkeypatch.setattr(_ws, "check_ssrf", guard)
+        result = WebSearchTool(engine="youcom").execute(
+            query="https://public.example.com/start"
+        )
+
+        assert result.success is False
+        assert "127.0.0.1" in result.content
+        assert requests == ["https://public.example.com/start"]
+        assert [call.args[0] for call in guard.call_args_list] == [
+            "https://public.example.com/start",
+            "https://public.example.com/start",
+            "http://127.0.0.1/admin",
+        ]
+
+    def test_url_public_redirect_is_followed_after_ssrf_check(self, monkeypatch):
+        """Public relative redirects still work when checked hop by hop."""
+        import httpx
+
+        import openjarvis.tools.web_search as _ws
+
+        requests = []
+
+        def handler(request):
+            requests.append(str(request.url))
+            if request.url.path == "/start":
+                return httpx.Response(
+                    302,
+                    headers={"location": "/article"},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                text="public article",
+                headers={"content-type": "text/html"},
+                request=request,
+            )
+
+        guard = MagicMock(return_value=None)
+        monkeypatch.setattr(
+            httpx.HTTPTransport,
+            "handle_request",
+            lambda self, request: handler(request),
+        )
+        monkeypatch.setattr(_ws, "check_ssrf", guard)
+        result = WebSearchTool(engine="youcom").execute(
+            query="https://public.example.com/start"
+        )
+
+        assert result.success is True
+        assert result.content == "public article"
+        assert requests == [
+            "https://public.example.com/start",
+            "https://public.example.com/article",
+        ]
+        assert [call.args[0] for call in guard.call_args_list] == [
+            "https://public.example.com/start",
+            "https://public.example.com/start",
+            "https://public.example.com/article",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +783,26 @@ class TestEngineSelection:
         monkeypatch.delenv("TAVILY_API_KEY", raising=False)
         monkeypatch.delenv("YOUDOTCOM_API_KEY", raising=False)
         monkeypatch.delenv("OPENJARVIS_WEB_SEARCH_ENGINE", raising=False)
+        assert WebSearchTool()._resolve_engine() == "youcom"
+
+    def test_auto_prefers_serply_over_the_keyless_tier(self, monkeypatch):
+        """A Serply key only ever wins over having no key at all."""
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+        monkeypatch.delenv("YOUDOTCOM_API_KEY", raising=False)
+        monkeypatch.delenv("OPENJARVIS_WEB_SEARCH_ENGINE", raising=False)
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-x")
+        assert WebSearchTool()._resolve_engine() == "serply"
+
+    def test_serply_never_displaces_an_existing_keyed_engine(self, monkeypatch):
+        """Adding a Serply key must not change where an install already goes."""
+        monkeypatch.delenv("OPENJARVIS_WEB_SEARCH_ENGINE", raising=False)
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-x")
+
+        monkeypatch.setenv("TAVILY_API_KEY", "tvly-x")
+        monkeypatch.setenv("YOUDOTCOM_API_KEY", "ydc-key")
+        assert WebSearchTool()._resolve_engine() == "tavily"
+
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
         assert WebSearchTool()._resolve_engine() == "youcom"
 
     def test_explicit_engine_overrides_key_presence(self, monkeypatch):
@@ -579,6 +831,8 @@ class TestEngineSelection:
         spec = WebSearchTool().spec
         assert spec.metadata["engine"] == "youcom"
         assert "YOUDOTCOM_API_KEY" in spec.metadata["optional_api_keys"]
+        assert "SERPLY_API_KEY" in spec.metadata["optional_api_keys"]
+        assert "serply" in spec.metadata["engines"]
         # Backwards compatible for readers of the old single-key field.
         assert spec.metadata["requires_api_key"] == "TAVILY_API_KEY"
 
@@ -737,6 +991,156 @@ class TestYouComSearch:
         assert "YOUDOTCOM_API_KEY" not in result.metadata["fallback_reason"]
 
 
+class TestSerplySearch:
+    """The Serply engine, exercised against mocked HTTP."""
+
+    PAYLOAD = {
+        "results": [
+            {
+                "title": "Result A",
+                "link": "https://example.com/a",
+                "description": "Desc A",
+                "position": 1,
+                "realPosition": 1,
+            },
+            {
+                "title": "Result B",
+                "link": "https://example.com/b",
+                "description": "Desc B",
+                "position": 2,
+                "realPosition": 2,
+            },
+        ],
+        "answers": [],
+        "knowledge_graph": {},
+        "related_questions": [],
+    }
+
+    def _mock_get(self, monkeypatch, payload=None, status=200):
+        import httpx
+
+        calls = {}
+
+        def _get(url, **kwargs):
+            calls["url"] = url
+            calls["params"] = kwargs.get("params")
+            calls["headers"] = kwargs.get("headers")
+            resp = MagicMock()
+            resp.status_code = status
+            resp.json.return_value = payload if payload is not None else self.PAYLOAD
+            if status >= 400:
+                resp.text = "error body"
+                resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+                    f"HTTP {status}", request=MagicMock(), response=resp
+                )
+            else:
+                resp.raise_for_status = MagicMock()
+            return resp
+
+        monkeypatch.setattr(httpx, "get", _get)
+        return calls
+
+    def test_endpoint_and_key_header(self, monkeypatch):
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-x")
+        calls = self._mock_get(monkeypatch)
+
+        result = WebSearchTool(engine="serply").execute(query="test query")
+
+        assert result.success is True
+        assert calls["url"] == "https://api.serply.io/v1/search"
+        assert calls["headers"]["X-Api-Key"] == "srp-x"
+        assert result.metadata["engine"] == "serply"
+
+    def test_result_format_matches_the_other_engines(self, monkeypatch):
+        """Same labeled Source/Summary shape agents already parse (#390)."""
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-x")
+        self._mock_get(monkeypatch)
+
+        result = WebSearchTool(engine="serply").execute(query="test query")
+
+        assert "### Result A" in result.content
+        assert "Source: https://example.com/a" in result.content
+        assert "Summary: Desc A" in result.content
+        assert "### Result B" in result.content
+        assert result.metadata["num_results"] == 2
+
+    def test_max_results_passed_as_num(self, monkeypatch):
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-x")
+        calls = self._mock_get(monkeypatch)
+        WebSearchTool(engine="serply", max_results=3).execute(query="q", max_results=7)
+        assert calls["params"] == {"q": "q", "num": 7}
+
+    def test_query_reaches_the_api_unmodified(self, monkeypatch):
+        """The point of a SERP proxy is that Google's operators survive, so
+        nothing here may rewrite, quote or strip the query."""
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-x")
+        calls = self._mock_get(monkeypatch)
+
+        query = "transformer inference site:arxiv.org after:2026-01-01"
+        WebSearchTool(engine="serply").execute(query=query)
+
+        assert calls["params"]["q"] == query
+
+    def test_empty_results(self, monkeypatch):
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-x")
+        self._mock_get(monkeypatch, payload={"results": []})
+        result = WebSearchTool(engine="serply").execute(query="q")
+        assert result.success is True
+        assert result.content == "No results found."
+
+    def test_no_proxy_location_header_by_default(self, monkeypatch):
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-x")
+        calls = self._mock_get(monkeypatch)
+
+        result = WebSearchTool(engine="serply").execute(query="q")
+
+        assert "X-Proxy-Location" not in calls["headers"]
+        assert "serply_location" not in result.metadata
+
+    def test_proxy_location_header_when_configured(self, monkeypatch):
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-x")
+        monkeypatch.setenv("SERPLY_PROXY_LOCATION", "DE")
+        calls = self._mock_get(monkeypatch)
+
+        result = WebSearchTool(engine="serply").execute(query="q")
+
+        assert calls["headers"]["X-Proxy-Location"] == "DE"
+        assert result.metadata["serply_location"] == "DE"
+
+    def test_rejected_key_names_the_env_var(self, monkeypatch):
+        """A 401 is a credential problem, and the fallback reason has to say
+        which variable to fix rather than just 'HTTP 401'."""
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-bad")
+        self._mock_get(monkeypatch, status=401)
+
+        mock_ddgs = MagicMock()
+        mock_ddgs.text.return_value = []
+        mock_module = MagicMock()
+        mock_module.DDGS.return_value = mock_ddgs
+        monkeypatch.setitem(sys.modules, "ddgs", mock_module)
+
+        result = WebSearchTool(engine="serply").execute(query="q")
+
+        assert result.metadata["fallback_from"] == "serply"
+        assert result.metadata["degraded"] is True
+        assert "SERPLY_API_KEY" in result.metadata["fallback_reason"]
+
+    def test_other_http_error_reports_the_status(self, monkeypatch):
+        monkeypatch.setenv("SERPLY_API_KEY", "srp-x")
+        self._mock_get(monkeypatch, status=500)
+
+        mock_ddgs = MagicMock()
+        mock_ddgs.text.return_value = []
+        mock_module = MagicMock()
+        mock_module.DDGS.return_value = mock_ddgs
+        monkeypatch.setitem(sys.modules, "ddgs", mock_module)
+
+        result = WebSearchTool(engine="serply").execute(query="q")
+
+        assert "HTTP 500" in result.metadata["fallback_reason"]
+        assert "SERPLY_API_KEY" not in result.metadata["fallback_reason"]
+
+
 class TestFallbackVisibility:
     def test_fallback_is_logged_at_warning(self, monkeypatch, caplog):
         """Regression for the silent-degradation half of #923: a typo'd key
@@ -841,7 +1245,7 @@ class TestYouComContentsExtraction:
         resp.text = "<html><body>Local text</body></html>"
         resp.headers = {"content-type": "text/html"}
         resp.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=resp))
+        monkeypatch.setattr(httpx.Client, "get", MagicMock(return_value=resp))
         monkeypatch.setattr(
             httpx, "post", MagicMock(side_effect=AssertionError("must not be called"))
         )
@@ -863,7 +1267,7 @@ class TestYouComContentsExtraction:
         resp.text = "<html><body>Local text</body></html>"
         resp.headers = {"content-type": "text/html"}
         resp.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=resp))
+        monkeypatch.setattr(httpx.Client, "get", MagicMock(return_value=resp))
 
         result = WebSearchTool(engine="youcom").execute(query="https://example.com/a")
 

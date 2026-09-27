@@ -204,6 +204,29 @@ def test_serve_does_not_call_systembuilder_build(tmp_path, monkeypatch):
     inject_spy.assert_called_once_with()
 
 
+def test_serve_passes_environment_cors_origins(tmp_path, monkeypatch):
+    """The normal CLI path must not mask the environment override."""
+    monkeypatch.setenv(
+        "OPENJARVIS_CORS_ORIGINS",
+        "https://frontend.example,https://admin.example",
+    )
+    create_app = MagicMock(return_value=MagicMock())
+
+    with patch("openjarvis.server.app.create_app", create_app):
+        result = _run_serve(
+            tmp_path,
+            monkeypatch,
+            build_spy=MagicMock(),
+            set_system_spy=MagicMock(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert create_app.call_args.kwargs["cors_origins"] == [
+        "https://frontend.example",
+        "https://admin.example",
+    ]
+
+
 def test_executor_receives_required_system_attrs(tmp_path, monkeypatch):
     """The executor still gets a system exposing the attributes it reads.
 

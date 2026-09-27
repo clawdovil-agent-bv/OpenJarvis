@@ -234,6 +234,107 @@ See the [Python SDK guide](../user-guide/python-sdk.md) for the full API referen
 
 ---
 
+## Hardware
+
+OpenJarvis has no special hardware requirements of its own — the CLI, server, and
+SDK run anywhere the software [Requirements](#requirements) below are met.
+`jarvis init` detects your CPU, RAM, and GPU, then recommends an inference engine
+and local model for the generated config. You can choose a different engine during
+setup.
+
+```bash
+jarvis init          # detect hardware, write a matching config
+```
+
+### Recommended configurations
+
+These are the Qwen3.5 recommendations for `llamacpp`, `mlx`, `ollama`, `vllm`, and
+`sglang`. `jarvis init` can offer an already-running engine first, and your engine
+choice can change the model. The bands use whole-number GB values and assume one
+GPU; the formulas below determine the exact result.
+
+| System RAM (no reported VRAM) | GPU VRAM (one GPU) | Recommended model | Download estimate |
+|-------------------------------|--------------------|-------------------|-------------------|
+| 5–14 GB | 1–8 GB | `qwen3.5:2b` | ~1.1 GB |
+| 15–24 GB | 9–17 GB | `qwen3.5:4b` | ~2.2 GB |
+| 25–44 GB | 18–35 GB | `qwen3.5:9b` | ~5.0 GB |
+| 45 GB or more | 36 GB or more | `qwen3.5:27b` | ~14.9 GB |
+
+The two memory columns are alternatives: when a GPU reports VRAM, the recommendation
+uses VRAM across all detected GPUs; otherwise it uses system RAM. On Apple Silicon,
+detection reports unified system memory as GPU memory.
+
+### How the model is chosen
+
+`jarvis init` first computes usable memory:
+
+| Detected | Usable memory |
+|----------|---------------|
+| GPU reporting VRAM | `VRAM × max(GPU count, 1) × 0.9` |
+| No GPU, or VRAM unavailable | `(total RAM − 4 GB) × 0.8` |
+
+For the Qwen3.5 tier engines, a positive usable-memory value selects the first
+tier it fits:
+
+| Usable memory | Model |
+|---------------|-------|
+| Up to 8 GB | `qwen3.5:2b` |
+| Up to 16 GB | `qwen3.5:4b` |
+| Up to 32 GB | `qwen3.5:9b` |
+| More than 32 GB | `qwen3.5:27b` |
+
+All four recommended Qwen3.5 models are dense. The table describes the current
+selection rule, not a guarantee that a model will fit or run well on every device
+in a band.
+
+### Inference engine
+
+The detected GPU vendor and reported name select the engine:
+
+| Detected GPU | Engine |
+|--------------|--------|
+| None or unrecognized GPU vendor | `llamacpp` |
+| Apple GPU | `mlx` |
+| NVIDIA name containing A100, H100, H200, L40, A10, or A30 | `vllm` |
+| Other NVIDIA | `ollama` |
+| AMD name containing MI300, MI325, MI350, or MI355 | `vllm` |
+| Other AMD (including Radeon) | `lemonade` |
+
+When `lemonade` is selected and usable memory is positive, `jarvis init` instead
+recommends `Qwen3.6-35B-A3B-GGUF`. The Qwen3.5 tier and download tables above do
+not apply to that default.
+
+See [Setting Up an Inference Backend](#setting-up-an-inference-backend) for
+installing the engine `jarvis init` picks.
+
+### Minimum
+
+The recommendation code imposes no CPU minimum. CPU-only inference speed depends
+on your processor and core count.
+
+Memory is the real floor. With 4 GB of RAM or less and no GPU, usable memory
+is zero or less and no local model is recommended.
+
+!!! tip "Low-memory and headless machines"
+    You do not need a local model at all. Point OpenJarvis at a hosted API with the
+    [cloud quick-path](install.md#cloud-quick-path) and the hardware tiers above
+    stop applying.
+
+### Storage
+
+Model weights dominate disk usage — the estimates above range from ~1.1 GB to
+~14.9 GB for the Qwen3.5 defaults. Budget additional space for the Python
+environment and whichever inference engine you install.
+
+!!! note "Overriding the detected defaults"
+    These are defaults, not limits. The generated config records what was detected
+    in a comment at the top of the file, and `default_model` under `[intelligence]`
+    in `~/.openjarvis/config.toml` can be set to anything larger or smaller — see
+    the [Configuration guide](configuration.md). Re-run `jarvis init --force` to
+    re-detect and overwrite an existing config.
+
+---
+
 ## Requirements
 
 | Requirement | Version | Install | Notes |

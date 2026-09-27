@@ -16,7 +16,6 @@ async-trait = { workspace = true }
 tokio-stream = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
-sysinfo = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

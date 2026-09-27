@@ -554,7 +554,7 @@ class TestUrlExpansion:
         mock_resp.text = "<html><body>Page content</body></html>"
         mock_resp.headers = {"content-type": "text/html"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr(httpx.Client, "get", MagicMock(return_value=mock_resp))
 
         agent = NativeOpenHandsAgent(MagicMock(), "test-model")
         text, expanded = agent._expand_urls("Summarize: https://example.com/article")
@@ -566,7 +566,7 @@ class TestUrlExpansion:
         import httpx
 
         monkeypatch.setattr(
-            httpx,
+            httpx.Client,
             "get",
             MagicMock(side_effect=Exception("Connection error")),
         )
@@ -591,7 +591,7 @@ class TestUrlExpansion:
                 return True, 0.0
 
         fetch = MagicMock()
-        monkeypatch.setattr(httpx, "get", fetch)
+        monkeypatch.setattr(httpx.Client, "get", fetch)
         policy = CapabilityPolicy(default_deny=True)
         policy.grant("_default", "network:fetch")
         policy.deny("restricted-native", "network:fetch")
@@ -627,7 +627,7 @@ class TestUrlExpansion:
         mock_resp.text = "<html><body>Article text here</body></html>"
         mock_resp.headers = {"content-type": "text/html"}
         mock_resp.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=mock_resp))
+        monkeypatch.setattr(httpx.Client, "get", MagicMock(return_value=mock_resp))
 
         engine = MagicMock()
         engine.engine_id = "mock"

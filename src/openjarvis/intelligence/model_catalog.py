@@ -98,18 +98,17 @@ BUILTIN_MODELS: List[ModelSpec] = [
         },
     ),
     # -----------------------------------------------------------------------
-    # Local models — Qwen3.5 (MoE)
+    # Local models — Qwen3.5 (dense and MoE)
     # -----------------------------------------------------------------------
     ModelSpec(
         model_id="qwen3.5:0.8b",
         name="Qwen3.5 0.8B",
         parameter_count_b=0.8,
-        active_parameter_count_b=0.15,
         context_length=131072,
         supported_engines=("ollama", "vllm", "llamacpp", "sglang", "mlx"),
         provider="alibaba",
         metadata={
-            "architecture": "moe",
+            "architecture": "dense",
             "hf_repo": "Qwen/Qwen3.5-0.8B",
             "mlx_repo": "mlx-community/Qwen3.5-0.8B-OptiQ-4bit",
         },
@@ -118,12 +117,11 @@ BUILTIN_MODELS: List[ModelSpec] = [
         model_id="qwen3.5:2b",
         name="Qwen3.5 2B",
         parameter_count_b=2.0,
-        active_parameter_count_b=0.4,
         context_length=131072,
         supported_engines=("ollama", "vllm", "llamacpp", "sglang", "mlx"),
         provider="alibaba",
         metadata={
-            "architecture": "moe",
+            "architecture": "dense",
             "hf_repo": "Qwen/Qwen3.5-2B",
             "mlx_repo": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
         },
@@ -132,12 +130,11 @@ BUILTIN_MODELS: List[ModelSpec] = [
         model_id="qwen3.5:9b",
         name="Qwen3.5 9B",
         parameter_count_b=9.0,
-        active_parameter_count_b=1.5,
         context_length=131072,
         supported_engines=("ollama", "vllm", "llamacpp", "sglang", "mlx"),
         provider="alibaba",
         metadata={
-            "architecture": "moe",
+            "architecture": "dense",
             "hf_repo": "Qwen/Qwen3.5-9B",
             "gguf_file": "qwen3.5-9b-q4_k_m.gguf",
             "mlx_repo": "mlx-community/Qwen3.5-9B-MLX-4bit",
@@ -147,13 +144,12 @@ BUILTIN_MODELS: List[ModelSpec] = [
         model_id="qwen3.5:27b",
         name="Qwen3.5 27B",
         parameter_count_b=27.0,
-        active_parameter_count_b=3.0,
         context_length=131072,
         min_vram_gb=16.0,
         supported_engines=("ollama", "vllm", "llamacpp", "sglang", "mlx"),
         provider="alibaba",
         metadata={
-            "architecture": "moe",
+            "architecture": "dense",
             "hf_repo": "Qwen/Qwen3.5-27B",
             "gguf_file": "qwen3.5-27b-q4_k_m.gguf",
             "mlx_repo": "mlx-community/Qwen3.5-27B-4bit-DWQ",
@@ -295,19 +291,18 @@ BUILTIN_MODELS: List[ModelSpec] = [
         },
     ),
     # -----------------------------------------------------------------------
-    # Local models — Qwen3.5 (MoE, Gated DeltaNet + sparse MoE)
+    # Local models — Qwen3.5 (4B dense, plus MoE variants)
     # -----------------------------------------------------------------------
     ModelSpec(
         model_id="qwen3.5:4b",
         name="Qwen3.5 4B",
         parameter_count_b=4.0,
-        active_parameter_count_b=0.5,
         context_length=262144,
         min_vram_gb=3.0,
         supported_engines=("ollama", "vllm", "sglang", "llamacpp", "mlx"),
         provider="alibaba",
         metadata={
-            "architecture": "moe",
+            "architecture": "dense",
             "hf_repo": "Qwen/Qwen3.5-4B",
             "gguf_file": "qwen3.5-4b-q4_k_m.gguf",
             "mlx_repo": "mlx-community/Qwen3.5-4B-OptiQ-4bit",

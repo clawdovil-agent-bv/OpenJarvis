@@ -297,8 +297,7 @@ def _available_memory_gb(hw: HardwareInfo) -> float:
 
 # Explicit tier table: (max_ram_gb, model_id).
 # Walked in order — first tier where available_gb <= max_ram is chosen.
-# Uses Qwen3.5 MoE models — better quality per GB than dense models since
-# only a fraction of parameters are active per token.
+# Uses dense Qwen3.5 models at increasing parameter sizes.
 _MODEL_TIERS = [
     (8, "qwen3.5:2b"),
     (16, "qwen3.5:4b"),

@@ -144,12 +144,15 @@ class DSPyAgentOptimizer:
 
         # Extract optimized parameters
         result: Dict[str, Any] = {}
-        if hasattr(optimized_program, "generate") and hasattr(
-            optimized_program.generate, "demos"
-        ):
+        # ChainOfThought wraps its predictor; BootstrapFewShot attaches demos
+        # to that predictor, not to the ChainOfThought module.
+        generate = getattr(optimized_program, "generate", None)
+        predictor = getattr(generate, "predict", generate)
+        demos = getattr(predictor, "demos", None)
+        if demos is not None:
             result["few_shot_examples"] = [
                 {"input": d.question, "output": d.answer}
-                for d in optimized_program.generate.demos
+                for d in demos
                 if hasattr(d, "question") and hasattr(d, "answer")
             ]
 

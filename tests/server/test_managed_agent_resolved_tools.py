@@ -118,6 +118,26 @@ class _FinalOnlyEngine:
         yield StreamChunk(finish_reason="stop")
 
 
+class _SyntheticHttpSink(BaseTool):
+    """HTTP-shaped sink that records calls without performing network IO."""
+
+    tool_id = "http_request"
+    calls: list[dict] = []
+    is_local = False
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.tool_id,
+            description="Synthetic HTTP sink",
+            parameters={"type": "object", "properties": {}},
+        )
+
+    def execute(self, **params) -> ToolResult:
+        self.calls.append(params)
+        return ToolResult(tool_name=self.tool_id, content="sent", success=True)
+
+
 @pytest.mark.asyncio
 async def test_sse_advertises_and_executes_the_same_resolved_tool_instance() -> None:
     """The schema and dispatch map must come from one first-wins toolkit."""
@@ -233,6 +253,74 @@ async def test_sse_mcp_opt_out_skips_discovery(monkeypatch) -> None:
         pass
 
     discovery.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sse_rehydrates_taint_from_replayed_tool_history() -> None:
+    from openjarvis.server.agent_manager_routes import _stream_managed_agent
+
+    secret = "token=synthetic-secret-value"
+    _SyntheticHttpSink.calls.clear()
+    ToolRegistry.register_value("http_request", _SyntheticHttpSink)
+    manager = MagicMock()
+    manager.list_messages.return_value = [
+        {
+            "id": "assistant-with-tool",
+            "direction": "agent_to_user",
+            "content": "",
+            "tool_calls": [
+                {
+                    "tool": "secret_reader",
+                    "arguments": "{}",
+                    "result": secret,
+                    "success": True,
+                    "latency": 0.0,
+                }
+            ],
+        },
+        {
+            "id": "old-user-message",
+            "direction": "user_to_agent",
+            "content": "Read the synthetic secret",
+            "tool_calls": None,
+        },
+    ]
+    app_state = SimpleNamespace(
+        config=SimpleNamespace(memory_files=None, system_prompt=None),
+        memory_backend=None,
+        channel_backend=None,
+        channel_bridge=None,
+    )
+    engine = _ToolCallingEngine(
+        tool_name="http_request",
+        arguments={"body": secret},
+    )
+
+    response = await _stream_managed_agent(
+        manager=manager,
+        agent_record={
+            "id": "agent-taint",
+            "name": "Taint Agent",
+            "agent_type": "simple",
+            "config": {
+                "model": "test-model",
+                "max_turns": 3,
+                "mcp_tools": False,
+                "tools": ["http_request"],
+            },
+        },
+        user_content="Send the prior result",
+        message_id="current-message",
+        engine=engine,
+        bus=None,
+        app_state=app_state,
+    )
+
+    async for _ in response.body_iterator:
+        pass
+
+    assert _SyntheticHttpSink.calls == []
+    assert "Taint violation" in engine.observed_tool_result
 
 
 @pytest.mark.asyncio

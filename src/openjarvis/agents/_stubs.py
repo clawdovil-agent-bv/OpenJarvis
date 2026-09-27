@@ -473,5 +473,38 @@ class ToolUsingAgent(BaseAgent):
         except ImportError:
             pass
 
+    def _emit_turn_start(self, input: str) -> None:
+        # A ToolUsingAgent instance may serve many unrelated requests. Start
+        # each run with fresh taint seeded only from the new user input;
+        # _build_messages below replaces this with full conversation history
+        # for agents that receive an AgentContext.
+        executor = getattr(self, "_executor", None)
+        if executor is not None:
+            executor.begin_session([input])
+        super()._emit_turn_start(input)
+
+    def _build_messages(
+        self,
+        input: str,
+        context: Optional[AgentContext] = None,
+        *,
+        system_prompt: Optional[str] = None,
+    ) -> list[Message]:
+        messages = super()._build_messages(
+            input,
+            context,
+            system_prompt=system_prompt,
+        )
+        self._begin_tool_session_from_messages(messages)
+        return messages
+
+    def _begin_tool_session_from_messages(self, messages: List[Message]) -> None:
+        """Seed executor taint from the complete conversation for this run."""
+        executor = getattr(self, "_executor", None)
+        if executor is not None:
+            executor.begin_session(
+                [message.text for message in messages if message.text]
+            )
+
 
 __all__ = ["AgentContext", "AgentResult", "BaseAgent", "ToolUsingAgent"]

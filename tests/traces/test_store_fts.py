@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -89,3 +90,48 @@ class TestFTS5Search:
     def test_search_empty(self, store):
         results = store.search("nonexistent gibberish xyzzy")
         assert results == []
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Alice's error",
+            "When did task-101 fail?",
+            "task-101",
+            "fix-traces-fts",
+        ],
+    )
+    def test_search_accepts_plain_text_punctuation(self, store, query):
+        store.save(
+            _make_trace(
+                "t_punct",
+                "investigate Alice's error in task-101",
+                "fixed by fix-traces-fts",
+                agent="debugger",
+            )
+        )
+        results = store.search(query)
+        assert any(r["trace_id"] == "t_punct" for r in results)
+
+    def test_search_accepts_symbol_heavy_terms(self, store):
+        store.save(
+            _make_trace(
+                "t_cpp",
+                "The C++ migration guide",
+                "success",
+                agent="coder",
+            )
+        )
+        assert store.search("C++")
+        assert store.search("++") == []
+
+    def test_search_empty_and_punctuation_only(self, store):
+        assert store.search("") == []
+        assert store.search("   ") == []
+        assert store.search("---") == []
+        assert store.search("???") == []
+
+    def test_search_surfaces_database_errors(self, store):
+        store._conn.execute("DROP TABLE traces_fts")
+
+        with pytest.raises(sqlite3.OperationalError, match="no such table"):
+            store.search("trace")

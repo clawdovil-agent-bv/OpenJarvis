@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from functools import wraps
@@ -231,14 +232,26 @@ class TraceStore:
         agent: str | None = None,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        """Full-text search across traces. Optionally filter by agent."""
+        """Full-text search across traces. Optionally filter by agent.
+
+        Parameters
+        ----------
+        query: Plain-text search query (FTS5 punctuation is handled internally).
+        agent: Restrict results to traces recorded by this agent.
+        limit: Maximum number of results to return.
+        """
+        terms = re.findall(r"\w+", query)
+        if not terms:
+            return []
+        fts_query = " OR ".join(f'"{term}"' for term in terms)
+
         sql = (
             "SELECT t.trace_id, t.query, t.result, t.agent, t.model, t.outcome,"
             " t.started_at "
             "FROM traces_fts f JOIN traces t ON f.rowid = t.rowid "
             "WHERE traces_fts MATCH ?"
         )
-        params: list[Any] = [query]
+        params: list[Any] = [fts_query]
         if agent:
             sql += " AND t.agent = ?"
             params.append(agent)

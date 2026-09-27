@@ -149,6 +149,23 @@ def test_sync_connector(engine: SyncEngine, store: KnowledgeStore) -> None:
     assert store.count() == 5
 
 
+def test_repeat_sync_rewrites_edited_document_with_same_pipeline(
+    engine: SyncEngine, store: KnowledgeStore
+) -> None:
+    """A long-lived SyncEngine must compare an edited document on each run."""
+    doc = _make_doc("doc:edited", content="Original note content.")
+    connector = StubConnector([doc])
+
+    assert engine.sync(connector) == 1
+    doc.content = "Updated note content."
+    assert engine.sync(connector) == 1
+
+    rows = store._conn.execute(
+        "SELECT content FROM knowledge_chunks WHERE doc_id = ?", (doc.doc_id,)
+    ).fetchall()
+    assert [row[0] for row in rows] == ["Updated note content."]
+
+
 # ---------------------------------------------------------------------------
 # Test 2: sync_saves_checkpoint — checkpoint items_synced is correct
 # ---------------------------------------------------------------------------

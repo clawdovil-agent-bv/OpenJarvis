@@ -4,6 +4,8 @@ import { MessageBubble } from './MessageBubble';
 import { InputArea } from './InputArea';
 import { StreamingDots } from './StreamingDots';
 import { useAppStore } from '../../lib/store';
+import { shouldAutoplayFinishedReply, useTtsStore } from '../../lib/tts';
+import { stripThinkTags } from '../../lib/message-text';
 import { Sparkles, PanelRightOpen, PanelRightClose, Database, MessageSquare, X } from 'lucide-react';
 import { listConnectors } from '../../lib/connectors-api';
 
@@ -26,6 +28,63 @@ export function ChatArea() {
   const wasStreaming = useRef(false);
   const lastScrollTop = useRef(0);
   const isCurrentChatStreaming = streamState.isStreaming && streamState.conversationId === activeId;
+
+  // Autoplay: speak a reply once it is finished, never while it streams -- a
+  // partial sentence would be synthesized and then cut off by the next chunk.
+  // autoSpokenId fences the message so re-renders cannot repeat it.
+  const voiceOutputEnabled = useAppStore((s) => s.settings.voiceOutputEnabled);
+  const voiceAutoplay = useAppStore((s) => s.settings.voiceAutoplay);
+  // Probe the backend as soon as voice output is switched on. Without this the
+  // first reply could never autoplay: `available` is only set by ensureHealth,
+  // which until now ran solely from the per-message read-aloud button -- and
+  // that button does not exist until a reply is already on screen.
+  useEffect(() => {
+    if (!voiceOutputEnabled) return;
+    useTtsStore.getState().ensureHealth();
+  }, [voiceOutputEnabled]);
+
+  // Speak on the falling edge of a stream -- the moment a reply finishes -- and
+  // never merely because a finished reply happens to be on screen. Opening the
+  // app or switching conversations would otherwise read stale history aloud,
+  // and browsers block that anyway: playback with no preceding user gesture is
+  // rejected outright, so the failure would be silent in both senses.
+  const streamingConversationRef = useRef<string | null>(null);
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    const tts = useTtsStore.getState();
+    const justFinished = shouldAutoplayFinishedReply(
+      streamingConversationRef.current,
+      activeId,
+      streamState.isStreaming,
+      last,
+      tts.autoSpokenId,
+    );
+    streamingConversationRef.current = isCurrentChatStreaming ? activeId : null;
+
+    if (!justFinished) return;
+    if (!voiceOutputEnabled || !voiceAutoplay) return;
+
+    if (!last || last.role !== 'assistant' || activeId === null) return;
+
+    // Model loading may still be in flight when a fast reply completes. Wait
+    // for the probe, then confirm that this is still the active finished reply.
+    const completedConversationId = activeId;
+    const completedMessageId = last.id;
+    void tts.ensureHealth().then(() => {
+      const app = useAppStore.getState();
+      const currentTts = useTtsStore.getState();
+      const currentLast = app.messages[app.messages.length - 1];
+      if (app.activeId !== completedConversationId || app.streamState.isStreaming) return;
+      if (!app.settings.voiceOutputEnabled || !app.settings.voiceAutoplay) return;
+      if (currentLast?.id !== completedMessageId || currentTts.available !== true) return;
+      if (currentTts.autoSpokenId === completedMessageId) return;
+
+      const text = stripThinkTags(currentLast.content);
+      if (!text) return;
+      currentTts.markAutoSpoken(completedMessageId);
+      void currentTts.speak(completedMessageId, text);
+    });
+  }, [activeId, messages, streamState.isStreaming, isCurrentChatStreaming, voiceOutputEnabled, voiceAutoplay]);
   const currentStreamContent = isCurrentChatStreaming ? streamState.content : '';
 
   // Check if any data sources are connected

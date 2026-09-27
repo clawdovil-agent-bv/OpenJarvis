@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from openjarvis.tools.file_read import FileReadTool
 
 
@@ -86,6 +88,26 @@ class TestFileReadTool:
         result = tool.execute(path=str(f))
         assert result.success is False
         assert "sensitive" in result.content.lower()
+
+    @pytest.mark.parametrize(
+        "alias_name,target_name", [("notes.txt", ".env"), (".env", "notes.txt")]
+    )
+    def test_blocks_symlink_alias_to_sensitive_file(
+        self, tmp_path, alias_name, target_name
+    ):
+        sensitive = tmp_path / target_name
+        sensitive.write_text("SECRET=foo", encoding="utf-8")
+        alias = tmp_path / alias_name
+        try:
+            alias.symlink_to(sensitive)
+        except OSError:
+            pytest.skip("filesystem does not permit creating symlinks")
+
+        result = FileReadTool().execute(path=str(alias))
+
+        assert result.success is False
+        assert "sensitive" in result.content.lower()
+        assert "SECRET=foo" not in result.content
 
     def test_allows_normal_py_files(self, tmp_path):
         f = tmp_path / "main.py"

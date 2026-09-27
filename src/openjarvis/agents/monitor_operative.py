@@ -238,6 +238,7 @@ class MonitorOperativeAgent(ToolUsingAgent):
             if ex.get("input") and ex.get("output"):
                 messages.insert(-1, Message(role=Role.USER, content=ex["input"]))
                 messages.insert(-1, Message(role=Role.ASSISTANT, content=ex["output"]))
+        self._begin_tool_session_from_messages(messages)
 
         # 5. Run function-calling tool loop
         openai_tools = self._executor.get_openai_tools() if self._tools else []

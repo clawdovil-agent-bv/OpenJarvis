@@ -267,8 +267,8 @@ fn resolve_bin(name: &str) -> String {
 }
 
 /// Find the OpenJarvis project root (contains pyproject.toml).
-/// Checks OPENJARVIS_ROOT env var, walks up from the executable, then
-/// probes common clone locations.
+/// Checks OPENJARVIS_ROOT env var, the checkout beside the executable,
+/// then walks up from the executable before probing common clone locations.
 fn find_project_root() -> Option<std::path::PathBuf> {
     // 1. Explicit env var override
     if let Ok(root) = std::env::var("OPENJARVIS_ROOT") {
@@ -278,16 +278,11 @@ fn find_project_root() -> Option<std::path::PathBuf> {
         }
     }
 
-    // 2. Walk up from the running executable (works in dev and .app bundle)
+    // 2. Find the checkout associated with this executable before considering
+    //    unrelated clones elsewhere on the machine.
     if let Ok(exe) = std::env::current_exe() {
-        let mut dir = exe.parent().map(|p| p.to_path_buf());
-        for _ in 0..8 {
-            if let Some(ref d) = dir {
-                if d.join("pyproject.toml").exists() {
-                    return Some(d.clone());
-                }
-                dir = d.parent().map(|p| p.to_path_buf());
-            }
+        if let Some(root) = project_root_near_executable(&exe) {
+            return Some(root);
         }
     }
 
@@ -347,6 +342,33 @@ fn find_project_root() -> Option<std::path::PathBuf> {
                 }
             }
         }
+    }
+
+    None
+}
+
+fn project_root_near_executable(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let exe_dir = exe.parent()?;
+
+    if exe_dir.join("pyproject.toml").is_file() {
+        return Some(exe_dir.to_path_buf());
+    }
+
+    // The Windows installer places the desktop executable in OpenJarvis/ and
+    // clones the matching Python backend into OpenJarvis/src/.
+    let installed_checkout = exe_dir.join("src");
+    if installed_checkout.join("pyproject.toml").is_file() {
+        return Some(installed_checkout);
+    }
+
+    // Development builds and app bundles may sit inside the checkout.
+    let mut dir = exe_dir.parent();
+    for _ in 1..8 {
+        let current = dir?;
+        if current.join("pyproject.toml").is_file() {
+            return Some(current.to_path_buf());
+        }
+        dir = current.parent();
     }
 
     None
@@ -3429,11 +3451,11 @@ mod tests {
         format_uv_sync_failure, format_uv_sync_spawn_error, matching_installed_model,
         model_names_match, normalize_host, parse_configured_inference_config,
         parse_ollama_model_names, persist_confirmed_inference_config_at, preferred_installed_model,
-        reload_cloud_keys_for_owned_backend_at, should_persist_resolved_model, spawn_owned_child,
-        stage_pending_inference_config_at, startup_installed_model, upsert_engine_host,
-        uv_sync_stderr_tail, BackendManager, InferenceConfig, InferenceCredentialStore,
-        PendingInferenceRollback, SetupStatus, SourceKind, DESKTOP_UV_SYNC_COMMAND,
-        PENDING_INFERENCE_API_KEY,
+        project_root_near_executable, reload_cloud_keys_for_owned_backend_at,
+        should_persist_resolved_model, spawn_owned_child, stage_pending_inference_config_at,
+        startup_installed_model, upsert_engine_host, uv_sync_stderr_tail, BackendManager,
+        InferenceConfig, InferenceCredentialStore, PendingInferenceRollback, SetupStatus,
+        SourceKind, DESKTOP_UV_SYNC_COMMAND, PENDING_INFERENCE_API_KEY,
     };
     use std::collections::HashMap;
     use std::path::Path;
@@ -3484,6 +3506,36 @@ mod tests {
             std::process::id(),
             nonce
         ))
+    }
+
+    #[test]
+    fn project_root_installed_desktop_finds_checkout_beside_executable() {
+        let root = unique_test_root("installed-desktop-root");
+        let install_dir = root.join("localappdata").join("OpenJarvis");
+        let bundled_checkout = install_dir.join("src");
+        let unrelated_clone = root.join("home").join("OpenJarvis");
+        std::fs::create_dir_all(&bundled_checkout).unwrap();
+        std::fs::create_dir_all(&unrelated_clone).unwrap();
+        std::fs::write(bundled_checkout.join("pyproject.toml"), "[project]\n").unwrap();
+        std::fs::write(unrelated_clone.join("pyproject.toml"), "[project]\n").unwrap();
+
+        let exe = install_dir.join("openjarvis-desktop.exe");
+        assert_eq!(project_root_near_executable(&exe), Some(bundled_checkout));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_root_development_executable_still_finds_ancestor_checkout() {
+        let root = unique_test_root("development-desktop-root");
+        let exe_dir = root.join("frontend").join("src-tauri").join("target");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::write(root.join("pyproject.toml"), "[project]\n").unwrap();
+
+        let exe = exe_dir.join("openjarvis-desktop");
+        assert_eq!(project_root_near_executable(&exe), Some(root.clone()));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

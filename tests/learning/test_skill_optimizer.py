@@ -139,3 +139,44 @@ class TestSkillOptimizerOptimize:
         assert "An optimized description" in content
         assert "hello" in content
         assert "world" in content
+
+    def test_dspy_compiled_demos_reach_skill_overlay(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """Use DSPy's nested result rather than falling back to raw traces."""
+        from openjarvis.learning.agents.dspy_optimizer import DSPyAgentOptimizer
+        from openjarvis.learning.agents.skill_optimizer import SkillOptimizer
+        from openjarvis.skills.overlay import SkillOverlayLoader
+
+        traces = [_make_skill_trace("research-skill")]
+        store = _FakeTraceStore(traces)
+        manager = _make_manager_with_skill("research-skill", tmp_path)
+
+        def fake_optimize(self, trace_store):
+            assert trace_store.list_traces(limit=100)[0] is traces[0]
+            return {
+                "status": "completed",
+                "config_updates": {
+                    "system_prompt": "Optimized skill description",
+                    "few_shot_examples": [
+                        {
+                            "input": "synthesized question",
+                            "output": "synthesized answer",
+                        }
+                    ],
+                },
+            }
+
+        monkeypatch.setattr(DSPyAgentOptimizer, "optimize", fake_optimize)
+        overlay_dir = tmp_path / "overlays"
+        result = SkillOptimizer(min_traces_per_skill=1).optimize(
+            store, manager, overlay_dir=overlay_dir
+        )
+
+        assert result["research-skill"].status == "optimized"
+        overlay = SkillOverlayLoader(overlay_dir).load("research-skill")
+        assert overlay is not None
+        assert overlay.description == "Optimized skill description"
+        assert overlay.few_shot == [
+            {"input": "synthesized question", "output": "synthesized answer"}
+        ]
